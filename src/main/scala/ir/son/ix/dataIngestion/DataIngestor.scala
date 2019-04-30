@@ -1,11 +1,18 @@
 package ir.son.ix.dataIngestion
 
+import java.util
+
+import cats.effect.IO
 import com.datastax.driver.core.utils.UUIDs
+import doobie.util.transactor.Transactor
+import cats.implicits._
+import doobie.implicits._
 import ir.son.ix.commons.SparkConf
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.LongType
 
+import scala.concurrent.ExecutionContext
 import scala.util.Try
 
 object DataIngestor {
@@ -14,6 +21,20 @@ object DataIngestor {
 
     Logger.getLogger("org").setLevel(Level.WARN)
     Logger.getLogger("akka").setLevel(Level.WARN)
+
+    /*
+    Doobie connection configs
+     */
+
+    implicit val cs = IO.contextShift(ExecutionContext.global)
+
+    val xa = Transactor.fromDriverManager[IO](
+      "org.postgresql.Driver", // driver classname
+      "jdbc:postgresql://localhost/transactional", // connect URL (driver-specific)
+      "postgres",              // user
+      "batman8941607"         // password
+    )
+
 
     /*
  Spark Configurations
@@ -27,12 +48,34 @@ object DataIngestor {
     val spark = SparkConf.sparkSessionCreator(conf)
     import spark.implicits._
 
+    /*
+    TimeStamp UUID creator UDF
+     */
+
+    val timeUUID = udf(() => UUIDs.timeBased().toString)
+
+    /*
+    filter Source files after checkpoint for transactions table
+     */
+
+    def filtCheck(files: util.List[String], checker: Try[Array[Int]]) = {
+
+      files
+        .toArray()
+        .filter(_.asInstanceOf[String].length > 5)
+        .filter(_.asInstanceOf[String].substring(0, 8).toInt > checker.getOrElse(Array(13800101)).sorted.apply(0))
+    }
+
+    /*
+    Create Source config read
+     */
+
     val allFiles = new ListFileJava
     val filesTr = allFiles.ListArray("172.16.11.132", "root",
       "/mnt/ConvertedFiles/AS400ConvertedFiles/TRDETL",
       "kZdjh=lka!")
     /*
-    Check for last fileDate
+    Check for last fileDate in transactions table
      */
 
     val checker :Try[Array[Int]] = Try (spark
@@ -47,19 +90,23 @@ object DataIngestor {
       .map(_ (0).asInstanceOf[Long].toString.substring(0, 8).toInt)
     )
 
+    /*
+    filter Source files after checkpoint for tables
+     */
 
-    val filesToWrite = filesTr
-      .toArray()
-      .filter(_.asInstanceOf[String].length > 5)
-      .filter(_.asInstanceOf[String].substring(0, 8).toInt > checker.getOrElse(Array(13800101)).sorted.apply(0))
+    val filesToWrite = filtCheck(filesTr, checker)
 
-    val timeUUID = udf(() => UUIDs.timeBased().toString)
+    /*
+    Select stockHolders code
+     */
 
-    if (filesToWrite.length > 0){
+    val shCodes = sql""" SELECT * FROM trd."nShCodes" """.query[String].to[Array].transact(xa).unsafeRunSync()
+
+    if (filesToWrite.nonEmpty){
 
       filesToWrite.foreach(x => {
 
-        spark.read
+        val sourceDF =  spark.read
           .format("com.springml.spark.sftp")
           .option("host", "172.16.11.132")
           .option("username", "root")
@@ -85,7 +132,10 @@ object DataIngestor {
             $"Freq".alias("freq"), $"Price".alias("price"),
             $"TESAC".alias("seller"), $"TESYMB".alias("symbol"),
             $"Time".alias("time"))
-          .write
+          .cache()
+
+        // ingest to transactions table
+        sourceDF.write
           .format("jdbc")
           .option("url", "jdbc:postgresql://localhost/transactional")
           .option("dbtable", "trd.transactions")
@@ -94,11 +144,43 @@ object DataIngestor {
           .mode("append")
           .save()
 
-        println(s"$x file written")
+        println(s"********************* $x file written in transactions table *********************")
+
+        // ingest to transactionsbuyer table
+         sourceDF
+           .select($"timeuuid", $"time", $"symbol", $"buyer", $"freq", $"price")
+           .filter($"buyer".isin(shCodes: _*))
+           .write
+           .format("jdbc")
+           .option("url", "jdbc:postgresql://localhost/transactional")
+           .option("dbtable", "trd.transactionsbuyer")
+           .option("user", "postgres")
+           .option("password", "batman8941607")
+           .mode("append")
+           .save()
+
+        println(s"********************* $x file written in transactionsbuyer table *********************")
+
+        // ingest to transactionsseller table
+         sourceDF
+           .select($"timeuuid", $"time", $"symbol", $"seller", $"freq", $"price")
+           .filter($"seller".isin(shCodes: _*))
+           .write
+           .format("jdbc")
+           .option("url", "jdbc:postgresql://localhost/transactional")
+           .option("dbtable", "trd.transactionsseller")
+           .option("user", "postgres")
+           .option("password", "batman8941607")
+           .mode("append")
+           .save()
+
+        println(s"********************* $x file written in transactionsseller table *********************")
+
+        sourceDF.unpersist()
 
       }
       )
-    } else println("Collection is up to date.")
+    } else println("*********************  tables is up to date. *********************")
 
 
     spark.stop()
