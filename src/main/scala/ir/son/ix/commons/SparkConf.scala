@@ -12,16 +12,16 @@ object SparkConf {
 
     new SparkConf()
     .setAppName(s"$appName")
-    .setMaster("local[*]")
-    .set("spark.sql.shuffle.partitions",s"$sqlShufflePar")
-    .set("spark.eventLog.enabled","false")
+//    .setMaster("local[*]")
+//    .set("spark.sql.shuffle.partitions",s"$sqlShufflePar")
+//    .set("spark.eventLog.enabled","false")
 
   //  .set("spark.eventLog.dir","/home/partnerpc9_ib/SparkDir/SparkEvent")
   //  .set("spark.history.fs.logDirectory","/home/partnerpc9_ib/SparkLogs")
 
-    .set("spark.driver.memory","10g")
-    .set("spark.executor-memory","14g")
-    .set("spark.local.dir ","/home/partnerpc9_ib/SparkTmpDir")
+//    .set("spark.driver.memory","10g")
+//    .set("spark.executor-memory","14g")
+//    .set("spark.local.dir ","/home/partnerpc9_ib/SparkTmpDir")
 
     //.set("spark.memory.offHeap.enable", "true")
     // .set("spark.memory.offHeap.size", "5g")
