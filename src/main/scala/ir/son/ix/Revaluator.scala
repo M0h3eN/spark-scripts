@@ -100,7 +100,7 @@ object Revaluator {
 
         val sellerMaxTime = Try(sellerDF.select($"time").first().getLong(0)).getOrElse(0)
 
-        if (sellerMaxTime!= 0) {
+        if (sellerMaxTime!= 0){
 
           val buyerDF = spark
             .read
